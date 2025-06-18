@@ -23,13 +23,14 @@
   "homepage": "https://github.com/Swatinem/rust-cache#readme",
   "dependencies": {
     "@actions/buildjet-cache": "npm:github-actions.cache-buildjet@0.2.0",
-    "@actions/warpbuild-cache": "npm:github-actions.warp-cache@1.4.7",
     "@actions/cache": "^5.0.1",
     "@actions/core": "^2.0.1",
     "@actions/exec": "^2.0.0",
     "@actions/glob": "^0.5.0",
     "@actions/io": "^2.0.0",
-    "smol-toml": "^1.5.2"
+    "@actions/warpbuild-cache": "npm:github-actions.warp-cache@1.4.7",
+    "smol-toml": "^1.5.2",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@types/node": "^25.0.2",

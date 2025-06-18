@@ -64,6 +64,10 @@ inputs:
     description: "A format string used to format commands to be run, i.e. `rustc` and `cargo`."
     required: false
     default: "{0}"
+  build-output-files:
+    description: "YAML list of filenames that contain output from `cargo (check|build|test|..) --message-format json`"
+    required: false
+    default: ""
 outputs:
   cache-hit:
     description: "A boolean value that indicates an exact match was found."

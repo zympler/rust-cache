@@ -1,13 +1,63 @@
 import * as core from "@actions/core";
 import * as io from "@actions/io";
 import fs from "fs";
+import fs_promises from "fs/promises";
 import path from "path";
 
 import { CARGO_HOME } from "./config";
 import { exists } from "./utils";
 import { Packages } from "./workspace";
 
-export async function cleanTargetDir(targetDir: string, packages: Packages, checkTimestamp = false) {
+interface BuildInfo {
+  filenames: string[] | undefined;
+}
+
+export async function getBuildFiles(
+  buildOutputFiles: string[]
+): Promise<Set<string>> {
+  var files: string[] = [];
+  for (const buildOutputFile of buildOutputFiles) {
+    core.debug(`Reading ${buildOutputFile}`);
+    const content = await fs_promises.readFile(buildOutputFile, {
+      encoding: "utf8",
+    });
+    for (const line of content.split("\n")) {
+      if (!line) continue;
+      const info: BuildInfo = JSON.parse(line);
+      if (info.filenames !== undefined) {
+        for (const fn of info.filenames) {
+          files.push(fn);
+        }
+      }
+    }
+  }
+  return new Set(files);
+}
+
+function packageHashesFor(
+  depsDir: string,
+  buildFiles: Set<string>
+): Set<string> {
+  var hashes: string[] = [];
+  for (const buildFile of buildFiles) {
+    const parsedFile = path.parse(buildFile);
+    if (parsedFile.dir == depsDir) {
+      const filename = parsedFile.name;
+      hashes.push(filename);
+      if (filename.startsWith("lib")) {
+        hashes.push(filename.substring(3));
+      }
+    }
+  }
+  return new Set(hashes);
+}
+
+export async function cleanTargetDir(
+  targetDir: string,
+  packages: Packages,
+  buildFiles: Set<string>,
+  checkTimestamp = false
+) {
   core.debug(`cleaning target directory "${targetDir}"`);
 
   // remove all *files* from the profile directory
@@ -21,9 +71,9 @@ export async function cleanTargetDir(targetDir: string, packages: Packages, chec
 
       try {
         if (isNestedTarget) {
-          await cleanTargetDir(dirName, packages, checkTimestamp);
+          await cleanTargetDir(dirName, packages, buildFiles, checkTimestamp);
         } else {
-          await cleanProfileTarget(dirName, packages, checkTimestamp);
+          await cleanProfileTarget(dirName, packages, buildFiles, checkTimestamp);
         }
       } catch {}
     } else if (dirent.name !== "CACHEDIR.TAG") {
@@ -32,7 +82,7 @@ export async function cleanTargetDir(targetDir: string, packages: Packages, chec
   }
 }
 
-async function cleanProfileTarget(profileDir: string, packages: Packages, checkTimestamp = false) {
+async function cleanProfileTarget(profileDir: string, packages: Packages, buildFiles: Set<string>, checkTimestamp = false) {
   core.debug(`cleaning profile directory "${profileDir}"`);
 
   // Quite a few testing utility crates store compilation artifacts as nested
@@ -42,11 +92,11 @@ async function cleanProfileTarget(profileDir: string, packages: Packages, checkT
     try {
       // https://github.com/vertexclique/kaos/blob/9876f6c890339741cc5be4b7cb9df72baa5a6d79/src/cargo.rs#L25
       // https://github.com/eupn/macrotest/blob/c4151a5f9f545942f4971980b5d264ebcd0b1d11/src/cargo.rs#L27
-      cleanTargetDir(path.join(profileDir, "target"), packages, checkTimestamp);
+      cleanTargetDir(path.join(profileDir, "target"), packages, buildFiles, checkTimestamp);
     } catch {}
     try {
       // https://github.com/dtolnay/trybuild/blob/eec8ca6cb9b8f53d0caf1aa499d99df52cae8b40/src/cargo.rs#L50
-      cleanTargetDir(path.join(profileDir, "trybuild"), packages, checkTimestamp);
+      cleanTargetDir(path.join(profileDir, "trybuild"), packages, buildFiles, checkTimestamp);
     } catch {}
 
     // Delete everything else.
@@ -62,17 +112,21 @@ async function cleanProfileTarget(profileDir: string, packages: Packages, checkT
   await rmExcept(path.join(profileDir, "build"), keepPkg, checkTimestamp);
   await rmExcept(path.join(profileDir, ".fingerprint"), keepPkg, checkTimestamp);
 
-  const keepDeps = new Set(
-    packages.flatMap((p) => {
-      const names = [];
-      for (const n of [p.name, ...p.targets]) {
-        const name = n.replace(/-/g, "_");
-        names.push(name, `lib${name}`);
-      }
-      return names;
-    }),
-  );
-  await rmExcept(path.join(profileDir, "deps"), keepDeps, checkTimestamp);
+  const depsDir = path.join(profileDir, "deps");
+  const keepDeps =
+    buildFiles.size > 0
+      ? packageHashesFor(depsDir, buildFiles)
+      : new Set(
+          packages.flatMap((p) => {
+            const names = [];
+            for (const n of [p.name, ...p.targets]) {
+              const name = n.replace(/-/g, "_");
+              names.push(name, `lib${name}`);
+            }
+            return names;
+          })
+        );
+  await rmExcept(depsDir, keepDeps, checkTimestamp);
 }
 
 export async function getCargoBins(): Promise<Set<string>> {
@@ -281,13 +335,19 @@ async function rmExcept(dirName: string, keepPrefix: Set<string>, checkTimestamp
 
     let name = dirent.name;
 
-    // strip the trailing hash
-    const idx = name.lastIndexOf("-");
-    if (idx !== -1) {
-      name = name.slice(0, idx);
-    }
+    // Strip the extension
+    const idxDot = name.lastIndexOf(".");
+    let noExtension = idxDot !== -1 ? name.slice(0, idxDot) : name;
 
-    if (!keepPrefix.has(name)) {
+    // strip the trailing hash
+    const idxDash = name.lastIndexOf("-");
+    let noHash = idxDash !== -1 ? name.slice(0, idxDash) : name;
+
+    if (
+      !keepPrefix.has(name) &&
+      !keepPrefix.has(noExtension) &&
+      !keepPrefix.has(noHash)
+    ) {
       await rm(dir.path, dirent);
     }
   }

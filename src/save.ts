@@ -1,7 +1,14 @@
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
+import YAML from "yaml";
 
-import { cleanBin, cleanGit, cleanRegistry, cleanTargetDir } from "./cleanup";
+import {
+  cleanBin,
+  cleanGit,
+  cleanRegistry,
+  cleanTargetDir,
+  getBuildFiles,
+} from "./cleanup";
 import { CacheConfig, isCacheUpToDate } from "./config";
 import { getCacheProvider, reportError } from "./utils";
 
@@ -37,6 +44,9 @@ async function run() {
     }
 
     const workspaceCrates = core.getInput("cache-workspace-crates").toLowerCase() || "false";
+    const buildOutputFiles: string[] = YAML.parse(core.getInput("build-output-files") || "[]");
+    const buildFiles = await getBuildFiles(buildOutputFiles);
+
     const allPackages = [];
     for (const workspace of config.workspaces) {
       const packages = await workspace.getPackagesOutsideWorkspaceRoot(config.cmdFormat);
@@ -47,7 +57,7 @@ async function run() {
       allPackages.push(...packages);
       try {
         core.info(`... Cleaning ${workspace.target} ...`);
-        await cleanTargetDir(workspace.target, packages);
+        await cleanTargetDir(workspace.target, packages, buildFiles);
       } catch (e) {
         core.debug(`${(e as any).stack}`);
       }
